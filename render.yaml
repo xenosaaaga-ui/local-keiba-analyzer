@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: local-keiba-analyzer
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_SOURCE
+        value: mock
