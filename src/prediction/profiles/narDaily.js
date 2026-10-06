@@ -91,6 +91,7 @@ const NAR_CONFIG = Object.freeze({
   skip: Object.freeze({
     maxMissingOddsRatio: 0.25, // これを超えるとオッズ未発表扱い
     flatTopRatio: 1.25, // 1番手の予測勝率が均等割(1/頭数)のこの倍率未満なら横一線
+    flatMinIndexGap: 2, // または予想指数の1位と3位の差がこれ未満なら横一線（実データの下位10%未満）
     minEvaluableCoverage: 0.3, // この利用率未満の馬は「評価不能」
     maxUnevaluableRatio: 0.5, // 評価不能な馬がこの割合を超えると見送り
   }),
@@ -255,10 +256,13 @@ function judgeNarSkip(analyzed, winCandidates, config) {
     const missingOdds = analyzed.filter((h) => validOdds(h.odds) === null).length / n;
     const unevaluable = analyzed.filter((h) => (num(h.prediction.coverage) ?? 0) < c.minEvaluableCoverage).length / n;
     const topProb = Math.max(...analyzed.map((h) => num(h.prediction.winProb) ?? 0));
+    const idx = analyzed.map((h) => num(h.prediction.index) ?? 50).sort((a, b) => b - a);
 
     if (missingOdds > c.maxMissingOddsRatio) reasons.push('オッズ未発表（発売前）または未取得');
     else if (winCandidates.length === 0) reasons.push('期待値1.0以上の候補がいない');
-    if (n >= 3 && topProb < c.flatTopRatio / n) reasons.push('上位馬の差が非常に小さい（横一線）');
+    if (n >= 3 && (topProb < c.flatTopRatio / n || idx[0] - idx[2] < c.flatMinIndexGap)) {
+      reasons.push('上位馬の差が非常に小さい（横一線）');
+    }
     if (unevaluable > c.maxUnevaluableRatio) reasons.push('評価可能なデータが極端に少ない');
   }
   const skip = reasons.length > 0;
