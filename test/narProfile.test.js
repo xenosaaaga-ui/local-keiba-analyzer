@@ -71,6 +71,19 @@ test('NAR: 少数サンプルの好成績を過大評価しない（1戦1勝 < 2
   assert.ok(h.distance.rate < 0.5, `1戦だけで満点級にならない: ${h.distance.rate}`);
 });
 
+test('NAR: 当競馬場・当距離は「その馬の水準との差（適性）」で評価し、全成績を3重に数えない', () => {
+  // 全成績は抜群だが当地・当距離は1戦だけ（成績は全成績並み）→ 適性は中立付近
+  const strong = analyzeRace(narRace([narHorse(1, { careerRecord: rec(10, 3, 2, 3), trackRecord: rec(0, 1, 0, 0), sameDistanceRecord: rec(0, 1, 0, 0) }), narHorse(2), narHorse(3)]));
+  const f = pred(strong, 1).factors;
+  assert.ok(f.career >= 80, `career=${f.career}`);
+  assert.ok(f.track >= 40 && f.track <= 60, `track=${f.track}`);
+  assert.ok(f.distance >= 40 && f.distance <= 60, `distance=${f.distance}`);
+
+  // 全成績は平凡だが当地で好走が多い → 当地適性が高い
+  const local = analyzeRace(narRace([narHorse(1, { careerRecord: rec(4, 3, 3, 20), trackRecord: rec(4, 3, 2, 3) }), narHorse(2), narHorse(3)]));
+  assert.ok(pred(local, 1).factors.track > 65, `track=${pred(local, 1).factors.track}`);
+});
+
 test('NAR: 欠損項目は残りのウェイトで再正規化し、NaN/Infinity を出さない', () => {
   const hs = field();
   hs[0] = narHorse(1, { careerRecord: null, trackRecord: null, sameDistanceRecord: null, bestTime: null }); // 初出走
