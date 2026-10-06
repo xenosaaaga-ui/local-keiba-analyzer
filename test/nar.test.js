@@ -12,7 +12,7 @@ const { analyzeRace } = require('../src/prediction');
 const { buildRaceZip, buildOddsZip, createFakeNarFetch } = require('./helpers/narFixture');
 
 test('値の変換: 成績・減量記号付き斤量・発走時刻', () => {
-  assert.deepEqual(parseRecord('1-2-0-5'), { starts: 8, wins: 1, places: 3 });
+  assert.deepEqual(parseRecord('1-2-0-5'), { starts: 8, wins: 1, seconds: 2, thirds: 0, places: 3 });
   assert.equal(parseRecord('0-0-0-0'), null);
   assert.equal(parseRecord(''), null);
   assert.equal(toNum('★53'), 53);
@@ -47,8 +47,8 @@ test('buildSnapshot: CSV を競馬場・レース・出走馬に変換する', (
   assert.equal(h1.odds, 2.4); // 単勝のみ採用（複勝 1.1 ではない）
   assert.equal(h2.odds, 15);
   assert.equal(h4.odds, 5.1);
-  assert.deepEqual(h1.trackRecord, { starts: 5, wins: 1, places: 2 });
-  assert.deepEqual(h1.sameDistanceRecord, { starts: 2, wins: 1, places: 1 });
+  assert.deepEqual(h1.trackRecord, { starts: 5, wins: 1, seconds: 1, thirds: 0, places: 2 });
+  assert.deepEqual(h1.sameDistanceRecord, { starts: 2, wins: 1, seconds: 0, thirds: 0, places: 1 });
   assert.equal(h2.trackRecord, null); // 0戦は null
   assert.ok(h1.surfaceAptitude >= 1 && h1.surfaceAptitude <= 5); // 右回り → ダート右成績から算出
   assert.equal(h1.bodyWeightDiff, 2);

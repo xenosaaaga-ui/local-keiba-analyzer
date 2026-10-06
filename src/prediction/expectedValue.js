@@ -49,4 +49,16 @@ function marketProbabilities(oddsList) {
   return inv.map((v) => (v === null || sum <= 0 ? null : v / sum));
 }
 
-module.exports = { validOdds, expectedValue, evRating, popularityRanks, marketProbabilities };
+/**
+ * 予測勝率が市場勝率の maxRatio 倍以内か（期待値を買い目に使ってよいかの確認）。
+ * maxRatio 未設定・市場勝率不明なら制限しない。
+ */
+function withinMarketGuard(winProb, marketProb, maxRatio) {
+  const ratio = num(maxRatio);
+  const p = num(winProb);
+  const m = num(marketProb);
+  if (ratio === null || p === null || m === null || m <= 0) return true;
+  return p / m <= ratio;
+}
+
+module.exports = { validOdds, expectedValue, evRating, popularityRanks, marketProbabilities, withinMarketGuard };

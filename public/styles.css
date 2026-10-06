@@ -147,6 +147,13 @@ button { font: inherit; color: inherit; }
 .verdict.skip { border-color: var(--skip-border); background: var(--skip-bg); }
 .verdict-title { font-weight: 800; font-size: 17px; }
 .verdict ul { margin: 4px 0 0; padding-left: 1.2em; font-size: 14px; }
+.confidence { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 8px; }
+.conf-badge { font-size: 12px; font-weight: 800; border-radius: 999px; padding: 2px 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.conf-badge.high { background: var(--go-bg); border-color: var(--plus); color: var(--plus); }
+.conf-badge.medium { color: var(--ev-fair); border-color: var(--ev-fair); }
+.conf-badge.low { color: var(--minus); border-color: var(--minus); }
+.conf-detail { font-size: 12px; color: var(--muted); }
+.verdict .profile { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .summary-grid > *, .horses > *, .stats > * { min-width: 0; }
 .pick { padding: 10px 12px; }

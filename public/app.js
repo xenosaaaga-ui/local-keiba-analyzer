@@ -14,6 +14,7 @@
   const pct = (p) => (isNum(p) ? (p * 100).toFixed(1) : '-');
   const fmtOdds = (o) => (isNum(o) ? o.toFixed(1) : '-');
   const fmtEv = (ev) => (isNum(ev) ? ev.toFixed(2) : '-');
+  const fmtTime = (sec) => (sec >= 60 ? `${Math.floor(sec / 60)}:${(sec % 60).toFixed(1).padStart(4, '0')}` : sec.toFixed(1));
 
   async function getJson(path) {
     const res = await fetch(API + path, { headers: { Accept: 'application/json' } });
@@ -159,10 +160,17 @@
     $('race-info').innerHTML = `<strong>${esc(race.trackName)} ${esc(race.raceNo)}R ${esc(race.name || '')}</strong><br>${esc(race.surface || '')}${esc(race.distance ?? '-')}m ・ 馬場:${esc(race.going || '-')} ・ ${esc(race.headcount)}頭 ・ 発走 ${esc(race.startTime || '-')}`;
 
     const v = summary.verdict;
+    const c = summary.confidence;
+    const meta = state.data.meta || {};
+    const confidence = c
+      ? `<div class="confidence"><span class="conf-badge ${esc(c.key)}">予想信頼度 ${esc(c.label)}</span><span class="conf-detail">${esc((c.details || []).join(' ・ '))}</span></div>`
+      : '';
     const verdict = `
       <div class="verdict${v.skip ? ' skip' : ''}">
         <div class="verdict-title">${v.skip ? '⚠ ' : '✔ '}${esc(v.message)}</div>
         ${v.reasons.length ? `<ul>${v.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+        ${confidence}
+        ${meta.profileLabel ? `<div class="profile">予想方式: ${esc(meta.profileLabel)}</div>` : ''}
       </div>`;
 
     const pick = (label, h, extra = '') => `
@@ -203,7 +211,7 @@
   function recentHtml(h) {
     const fin = Array.isArray(h.recentFinishes) ? h.recentFinishes : [];
     const mar = Array.isArray(h.recentMargins) ? h.recentMargins : [];
-    if (!fin.some(isNum)) return '<div>近走: データなし</div>';
+    if (!fin.some(isNum)) return state.data.meta && state.data.meta.profile === 'narDaily' ? '' : '<div>近走: データなし</div>';
     const items = fin
       .map((f, i) => {
         if (!isNum(f)) return '<span>-</span>';
@@ -256,7 +264,7 @@
           <details class="details">
             <summary>詳しいデータ</summary>
             ${recentHtml(h)}
-            ${h.careerRecord ? `<div>全成績: ${esc(recText(h.careerRecord))}${isNum(h.bodyWeight) ? ` ／ 馬体重: ${h.bodyWeight}kg${isNum(h.bodyWeightDiff) ? `(${h.bodyWeightDiff > 0 ? '+' : ''}${h.bodyWeightDiff})` : ''}` : ''}</div>` : ''}
+            ${h.careerRecord ? `<div>全成績: ${esc(recText(h.careerRecord))}${isNum(h.bodyWeight) ? ` ／ 馬体重: ${h.bodyWeight}kg${isNum(h.bodyWeightDiff) ? `(${h.bodyWeightDiff > 0 ? '+' : ''}${h.bodyWeightDiff})` : ''}` : ''}${isNum(h.bestTime) ? ` ／ 持ち時計: ${fmtTime(h.bestTime)}` : ''}</div>` : ''}
             <div>同距離: ${esc(recText(h.sameDistanceRecord))} ／ 当地: ${esc(recText(h.trackRecord))}</div>
             <div>馬場適性: ${isNum(h.surfaceAptitude) ? '★'.repeat(h.surfaceAptitude) : '-'} ／ 騎手評価: ${isNum(h.jockeyRating) ? h.jockeyRating : '-'} ／ クラス評価: ${isNum(h.classRating) ? h.classRating : '-'} ／ 休養: ${isNum(h.restDays) ? h.restDays + '日' : '-'}</div>
             <div class="factors">${factors}</div>

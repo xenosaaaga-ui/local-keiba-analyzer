@@ -54,13 +54,21 @@ function toInt(value) {
   return n === null ? null : Math.trunc(n);
 }
 
-/** "1-2-0-5"（1着-2着-3着-着外）→ { starts, wins, places }。0戦は null */
+/** "1-2-0-5"（1着-2着-3着-着外）→ { starts, wins, seconds, thirds, places }。0戦は null */
 function parseRecord(value) {
   const m = /^(\d+)-(\d+)-(\d+)-(\d+)$/.exec(String(value || '').trim());
   if (!m) return null;
   const [w, s, t, o] = m.slice(1).map(Number);
   const starts = w + s + t + o;
-  return starts > 0 ? { starts, wins: w, places: w + s + t } : null;
+  return starts > 0 ? { starts, wins: w, seconds: s, thirds: t, places: w + s + t } : null;
+}
+
+/** "1:28.2" / "58.9" / "良1:28.2" → 秒。読めなければ null */
+function parseRaceTime(value) {
+  const m = /(?:(\d+):)?(\d{1,2}\.\d)/.exec(String(value || ''));
+  if (!m) return null;
+  const sec = (m[1] ? Number(m[1]) * 60 : 0) + Number(m[2]);
+  return sec > 0 ? sec : null;
 }
 
 /** "1540" → "15:40" */
@@ -115,6 +123,8 @@ function toHorse(row, race, winOdds) {
     careerRecord: parseRecord(row['全成績']),
     sameDistanceRecord: parseRecord(row['うち当距離成績']), // 当競馬場・当距離の成績
     trackRecord: parseRecord(row['当競馬場成績']),
+    bestTime: parseRaceTime(row['最高タイム']), // 秒（当競馬場・当距離の最高タイムと推定）
+    bestTimeGood: parseRaceTime(row['最高タイム良馬場']),
     surfaceAptitude: surfaceAptitude(row, race),
     jockeyRating: null, // 「騎手成績」の集計範囲が仕様書に無いため使わない
     classRating: null,
@@ -162,6 +172,7 @@ function buildSnapshot(raceFiles, oddsFiles) {
       weather: r['天候'] || null,
       startTime: formatTime(r['発走時刻']),
       headcount: toInt(r['頭数']),
+      scoringProfile: 'narDaily', // 当日NARデータ専用の予想プロファイルを使う
       horses: [],
     };
     (races[trackId] ||= []).push(race);
@@ -187,4 +198,4 @@ function buildSnapshot(raceFiles, oddsFiles) {
   return { date, tracks, races, hasOdds: Boolean(oddsCsv) };
 }
 
-module.exports = { buildSnapshot, parseRecord, toNum, formatTime, parseWinOdds, TRACK_IDS };
+module.exports = { buildSnapshot, parseRecord, parseRaceTime, toNum, formatTime, parseWinOdds, TRACK_IDS };

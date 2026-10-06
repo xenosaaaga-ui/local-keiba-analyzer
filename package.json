@@ -1,6 +1,6 @@
 {
   "name": "local-keiba-analyzer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "NAR地方競馬向けの予想・分析Webアプリ（予想指数・予測勝率・期待値・印）",
   "main": "server.js",
   "private": true,

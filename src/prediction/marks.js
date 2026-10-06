@@ -2,6 +2,7 @@
 
 const { num } = require('./utils');
 const { DEFAULT_CONFIG } = require('./config');
+const { withinMarketGuard } = require('./expectedValue');
 
 const MARKS = Object.freeze({
   honmei: { symbol: '◎', label: '本命' },
@@ -45,7 +46,14 @@ function assignMarks(horses, config = DEFAULT_CONFIG) {
     const h = list[idx];
     const ev = num(h.ev);
     const pop = num(h.popularity);
-    return ev !== null && ev >= c.anaMinEv && pop !== null && pop >= c.anaMinPopularity && (num(h.winProb) ?? 0) >= c.anaMinProb;
+    return (
+      ev !== null &&
+      ev >= c.anaMinEv &&
+      pop !== null &&
+      pop >= c.anaMinPopularity &&
+      (num(h.winProb) ?? 0) >= c.anaMinProb &&
+      withinMarketGuard(h.winProb, h.marketProb, c.maxModelMarketRatio)
+    );
   });
   if (anaCandidates.length) {
     const best = anaCandidates.reduce((a, b) => ((num(list[b].ev) ?? 0) > (num(list[a].ev) ?? 0) ? b : a));

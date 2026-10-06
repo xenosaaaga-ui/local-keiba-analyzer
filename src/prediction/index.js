@@ -1,12 +1,12 @@
 'use strict';
 
-const { DEFAULT_CONFIG, FACTOR_LABELS } = require('./config');
 const { num, round, arr, sanitize } = require('./utils');
-const { scoreFactors, computeIndex, fieldAverageWeight } = require('./scoring');
+const { computeIndex } = require('./scoring');
 const { winProbabilities } = require('./probability');
-const { validOdds, expectedValue, evRating, popularityRanks, marketProbabilities } = require('./expectedValue');
+const { validOdds, expectedValue, evRating, popularityRanks, marketProbabilities, withinMarketGuard } = require('./expectedValue');
 const { assignMarks, rankOrder, MARKS } = require('./marks');
-const { buildReasons } = require('./reasons');
+const { profileFor } = require('./profiles');
+const { judgeSkip } = require('./profiles/default');
 
 function brief(h) {
   if (!h) return null;
@@ -19,31 +19,6 @@ function brief(h) {
     ev: h.prediction.ev,
     index: h.prediction.index,
     popularity: h.prediction.popularity,
-  };
-}
-
-/** 見送り判定 */
-function judgeSkip(analyzed, winCandidates, config) {
-  const reasons = [];
-  if (analyzed.length === 0) {
-    reasons.push('出走馬データがありません');
-  } else {
-    if (winCandidates.length === 0) reasons.push('期待値1.0以上の馬がいない');
-    const idx = analyzed.map((h) => h.prediction.index).sort((a, b) => b - a);
-    if (idx.length >= 3 && idx[0] - idx[2] < config.skip.minTopIndexGap) {
-      reasons.push('上位馬の評価差が小さすぎる（混戦）');
-    }
-    const lowCoverage = analyzed.filter((h) => h.prediction.coverage < config.skip.lowCoverage).length / analyzed.length;
-    const missingOdds = analyzed.filter((h) => validOdds(h.odds) === null).length / analyzed.length;
-    if (lowCoverage > config.skip.maxLowCoverageRatio || missingOdds > config.skip.maxMissingOddsRatio) {
-      reasons.push('欠損データが多く信頼度が低い');
-    }
-  }
-  const skip = reasons.length > 0;
-  return {
-    skip,
-    reasons,
-    message: skip ? 'このレースは見送り推奨' : '勝負可能：単勝候補あり',
   };
 }
 
@@ -71,22 +46,26 @@ function quinellaCandidates(byMark, config) {
 
 /**
  * レースを分析する。入力の欠損・異常値に対して例外を投げず、NaN/Infinity を出さない。
+ * 予想指数・評価理由・見送り判定・予想信頼度は、レースの scoringProfile で選んだプロファイルに従う。
+ * 単勝オッズは予想指数・予測勝率には使わず、期待値・人気・印（☆）の算出にだけ使う。
  * @param {object} race データアダプターが返すレース
- * @param {object} [config]
+ * @param {object} [config] 省略時はプロファイルの設定
  */
-function analyzeRace(race, config = DEFAULT_CONFIG) {
+function analyzeRace(race, config) {
   const r = race && typeof race === 'object' ? race : {};
+  const profile = profileFor(r);
+  const cfg = config || profile.config;
   const horses = arr(r.horses)
     .filter((h) => h && typeof h === 'object')
     .map(sanitize);
 
-  const avgWeight = fieldAverageWeight(horses);
+  const ctx = profile.prepare(horses, r);
   const scored = horses.map((h) => {
-    const factors = scoreFactors(h, avgWeight);
-    return { factors, ...computeIndex(factors, config.weights) };
+    const { factors, samples } = profile.scoreHorse(h, ctx);
+    return { factors, samples, ...computeIndex(factors, cfg.weights) };
   });
 
-  const probs = winProbabilities(scored.map((s) => s.index), config.probability);
+  const probs = winProbabilities(scored.map((s) => s.index), cfg.probability);
   const oddsList = horses.map((h) => h.odds);
   const pops = popularityRanks(oddsList);
   const market = marketProbabilities(oddsList);
@@ -100,12 +79,13 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
       prediction: {
         index: scored[i].index,
         coverage: scored[i].coverage,
+        samples: scored[i].samples,
         factors: Object.fromEntries(
           Object.entries(scored[i].factors).map(([k, v]) => [k, v === null ? null : round(v * 100, 0)]),
         ),
         winProb: round(winProb, 4),
         ev,
-        evRating: evRating(ev, config.ev),
+        evRating: evRating(ev, cfg.ev),
         popularity: pops[i],
         marketProb: market[i] === null ? null : round(market[i], 4),
       },
@@ -119,8 +99,9 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
     index: h.prediction.index,
     ev: h.prediction.ev,
     popularity: h.prediction.popularity,
+    marketProb: h.prediction.marketProb,
   }));
-  const marks = assignMarks(markInput, config);
+  const marks = assignMarks(markInput, cfg);
   const byMark = {};
   analyzed.forEach((h, i) => {
     const key = marks[i];
@@ -131,13 +112,15 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
   });
 
   // 評価理由
-  analyzed.forEach((h) => {
-    h.prediction.reasons = buildReasons(h, {
+  analyzed.forEach((h, i) => {
+    h.prediction.reasons = profile.buildReasons(h, {
+      ...ctx,
       ev: h.prediction.ev,
       winProb: h.prediction.winProb,
       popularity: h.prediction.popularity,
       coverage: h.prediction.coverage,
-      factors: scored[analyzed.indexOf(h)].factors,
+      marketProb: h.prediction.marketProb,
+      factors: scored[i].factors,
     });
   });
 
@@ -147,11 +130,16 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
     analyzed[idx].prediction.rank = rank + 1;
   });
 
-  // 単勝候補
+  // 単勝候補（プロファイルによっては、市場勝率から大きく乖離した馬を除く）
   const winCandidates = analyzed
-    .filter((h) => (num(h.prediction.ev) ?? 0) >= config.candidates.winMinEv && h.prediction.winProb >= config.candidates.winMinProb)
+    .filter(
+      (h) =>
+        (num(h.prediction.ev) ?? 0) >= cfg.candidates.winMinEv &&
+        h.prediction.winProb >= cfg.candidates.winMinProb &&
+        withinMarketGuard(h.prediction.winProb, h.prediction.marketProb, cfg.candidates.maxModelMarketRatio),
+    )
     .sort((a, b) => b.prediction.ev - a.prediction.ev)
-    .slice(0, config.candidates.maxWin);
+    .slice(0, cfg.candidates.maxWin);
 
   // 危険な人気馬: 上位人気なのに期待値が低い（◎は除く）
   const dangerous = analyzed
@@ -159,13 +147,15 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
       (h) =>
         h.prediction.mark !== 'honmei' &&
         h.prediction.popularity !== null &&
-        h.prediction.popularity <= config.danger.maxPopularity &&
+        h.prediction.popularity <= cfg.danger.maxPopularity &&
         h.prediction.ev !== null &&
-        h.prediction.ev < config.danger.maxEv,
+        h.prediction.ev < cfg.danger.maxEv,
     )
     .sort((a, b) => a.prediction.popularity - b.prediction.popularity);
 
-  const skip = judgeSkip(analyzed, winCandidates, config);
+  // 見送り（買う根拠があるか）と予想信頼度（予想をどこまで信用できるか）は別々に判定する
+  const skip = profile.judgeSkip(analyzed, winCandidates, cfg);
+  const confidence = profile.assessConfidence(analyzed, cfg);
 
   return {
     race: {
@@ -188,10 +178,11 @@ function analyzeRace(race, config = DEFAULT_CONFIG) {
       ana: brief(byMark.ana),
       dangerous: dangerous.map(brief),
       winCandidates: winCandidates.map(brief),
-      quinellaCandidates: quinellaCandidates(byMark, config),
+      quinellaCandidates: quinellaCandidates(byMark, cfg),
       verdict: skip,
+      confidence,
     },
-    meta: { factorLabels: FACTOR_LABELS, weights: config.weights },
+    meta: { profile: profile.id, profileLabel: profile.label, factorLabels: profile.factorLabels, weights: cfg.weights },
   };
 }
 

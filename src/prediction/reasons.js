@@ -75,12 +75,20 @@ function buildReasons(horse, ctx) {
 
   if (num(ctx.coverage) !== null && ctx.coverage < 0.6) add(minus, 'データ不足で評価の信頼度が低め', 0.85);
 
-  // どちらかが空なら、最も良い / 悪いファクターで補完する
-  const factors = Object.entries(ctx.factors || {}).filter(([, v]) => num(v) !== null);
+  return finalizeReasons(plus, minus, ctx.factors, FACTOR_LABELS);
+}
+
+/**
+ * 理由候補 { text, strength } からプラス最大3・マイナス最大2を選ぶ。
+ * どちらかが空なら、最も良い / 悪いファクターで補完する。
+ */
+function finalizeReasons(plus, minus, factorScores, labels) {
+  const add = (list, text, strength) => list.push({ text, strength });
+  const factors = Object.entries(factorScores || {}).filter(([, v]) => num(v) !== null);
   if (factors.length) {
     const sorted = factors.slice().sort((a, b) => b[1] - a[1]);
-    if (!plus.length) add(plus, `${FACTOR_LABELS[sorted[0][0]]}は他項目より良好`, 0.1);
-    if (!minus.length) add(minus, `${FACTOR_LABELS[sorted[sorted.length - 1][0]]}はやや見劣る`, 0.1);
+    if (!plus.length) add(plus, `${labels[sorted[0][0]]}は他項目より良好`, 0.1);
+    if (!minus.length) add(minus, `${labels[sorted[sorted.length - 1][0]]}はやや見劣る`, 0.1);
   }
   if (!plus.length) add(plus, '強調できる材料は少ない', 0);
   if (!minus.length) add(minus, '判断材料が少ない', 0);
@@ -96,4 +104,4 @@ function buildReasons(horse, ctx) {
   ];
 }
 
-module.exports = { buildReasons };
+module.exports = { buildReasons, finalizeReasons };
