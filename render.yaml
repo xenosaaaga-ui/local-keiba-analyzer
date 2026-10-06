@@ -12,3 +12,8 @@ services:
         value: "22"
       - key: DATA_SOURCE
         value: mock
+      # 本人専用モード（/real）の Basic 認証。値は Render ダッシュボードで設定し、Git には保存しない
+      - key: REAL_AUTH_USER
+        sync: false
+      - key: REAL_AUTH_PASSWORD
+        sync: false

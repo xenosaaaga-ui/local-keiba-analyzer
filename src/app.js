@@ -4,12 +4,13 @@ const path = require('path');
 const express = require('express');
 const { createDataSource } = require('./data');
 const { createRaceService } = require('./services/raceService');
+const { basicAuth } = require('./auth/basicAuth');
+const { createNarDiagnostics } = require('./data/nar/diagnostics');
 
-function createApp({ dataSource = createDataSource() } = {}) {
-  const service = createRaceService(dataSource);
-  const app = express();
-  app.disable('x-powered-by');
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
+/** /tracks /races /race /health を持つ API ルーター（公開モック版・本人専用モードで共通） */
+function createApiRouter(service) {
   const api = express.Router();
   api.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -56,10 +57,46 @@ function createApp({ dataSource = createDataSource() } = {}) {
     }
   });
 
-  api.use((req, res) => res.status(404).json({ error: 'Not found' }));
+  return api;
+}
 
+/**
+ * @param {object} [options]
+ * @param {object} [options.dataSource]  公開版のデータソース（常にモック）
+ * @param {object} [options.auth]        本人専用モードの認証情報 { user, password }
+ * @param {Function} [options.diagnose]  NAR 疎通診断（テスト用に差し替え可能）
+ */
+function createApp({
+  dataSource = createDataSource(),
+  auth = { user: process.env.REAL_AUTH_USER, password: process.env.REAL_AUTH_PASSWORD },
+  diagnose = createNarDiagnostics(),
+} = {}) {
+  const app = express();
+  app.disable('x-powered-by');
+
+  // ---------- 本人専用モード（/real 以下はすべて Basic 認証） ----------
+  const real = express.Router();
+  real.use(basicAuth(auth));
+
+  const realApi = express.Router();
+  realApi.get('/diag', async (req, res, next) => {
+    try {
+      const result = await diagnose();
+      res.status(result.ok ? 200 : 502).json(result);
+    } catch (e) {
+      next(e);
+    }
+  });
+  realApi.use((req, res) => res.status(404).json({ error: 'Not found' }));
+  real.use('/api', realApi);
+  real.use(express.static(PUBLIC_DIR));
+  app.use('/real', real);
+
+  // ---------- 公開モック版 ----------
+  const api = createApiRouter(createRaceService(dataSource));
+  api.use((req, res) => res.status(404).json({ error: 'Not found' }));
   app.use('/api', api);
-  app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '5m' }));
+  app.use(express.static(PUBLIC_DIR, { maxAge: '5m' }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
