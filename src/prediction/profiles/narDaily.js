@@ -24,14 +24,16 @@ const { assessConfidence, DEFAULT_THRESHOLDS } = require('../confidence');
  *                            埋めるために付けられている。「軽い＝有利」は一部しか成り立たない。
  *   馬体重増減     5% →  5%
  *
- * 全成績 ⊇ 当競馬場成績 ⊇ 当距離成績 の入れ子構造なので、そのまま3項目に使うと同じ成績を
- * 3重に数えてしまう（実データでは全成績の水準が実質70%の重みになり、クラスの違いを最も
- * 受けやすい項目に評価が偏った）。そこで役割を分ける:
- *   全成績       … 馬の能力水準。全体平均（事前分布）へ寄せた着順ポイント率
- *   当競馬場成績 … 当地適性。当地の成績が「その馬の全成績の水準」よりどれだけ良い/悪いか
- *   当距離成績   … 距離適性。当コース当距離の成績が「その馬の当地成績の水準」よりどれだけ良い/悪いか
- * 適性は親の推定値へ寄せてから差を取るので、出走数が少ないほど 0.5（中立）に近づく。
- * これで「1戦1勝」のような少数サンプルの好成績は過大評価されない。
+ * 全成績 ⊇ 当競馬場成績 ⊇ 当距離成績 の入れ子構造なので、3項目を別々に「水準」として評価すると
+ * 同じ成績を3重に数えたり、少数サンプルの補正の仕方で見かけの差が出たりする。そこで、すべて
+ * 着順ポイント率という同じ単位で「この条件での推定水準」を組み立てる:
+ *   全成績       … 能力水準 L = 全体平均へ寄せた全成績のポイント率
+ *   当競馬場成績 … L + 当地適性 A_t
+ *   当距離成績   … L + A_t + 距離適性 A_d
+ * A_t = 当地の率 − 他場の率、A_d = 当コース当距離の率 − 当地の他距離の率。
+ * 差には両方の出走数による信頼度 n/(n+k) を掛けるので、出走数が少ないほど 0 に近づき、
+ * 「1戦1勝」のような少数サンプルの好成績は過大評価されない。比較相手が無い（当地しか
+ * 走っていない等）ときは適性 0（＝全成績の水準のまま）とする。当地・当距離の出走が無ければ欠損。
  */
 
 const NAR_WEIGHTS = Object.freeze({
@@ -45,8 +47,8 @@ const NAR_WEIGHTS = Object.freeze({
 
 const NAR_FACTOR_LABELS = Object.freeze({
   career: '全成績',
-  track: '当競馬場適性',
-  distance: '当距離適性',
+  track: '当競馬場成績',
+  distance: '当距離成績',
   bestTime: '持ち時計',
   weight: '斤量',
   bodyWeight: '馬体重増減',
@@ -57,12 +59,12 @@ const NAR_SCORING = Object.freeze({
   points: Object.freeze({ win: 1, second: 0.5, third: 0.3, placeUnknown: 0.4 }),
   // 全体平均のポイント率（10頭立て前後なら (1+0.5+0.3)/10 ≒ 0.18）
   priorRate: 0.18,
-  // 能力水準: ポイント率 → 1 - exp(-率/0.3)。平均0.18で0.45、0.5で0.81。上限で頭打ちにしない
+  // 水準: ポイント率 → 1 - exp(-率/0.3)。平均0.18で0.45、0.5で0.81。上限で頭打ちにしない
   levelScale: 0.3,
-  // 適性: 親の水準との差 → 0.5 + 0.5*tanh(差/0.15)。差+0.1で0.79、-0.1で0.21
-  aptitudeScale: 0.15,
-  // 事前分布の強さ（仮想出走数）。大きいほど少数サンプルを割り引く
-  priorStarts: Object.freeze({ career: 6, track: 4, distance: 3 }),
+  // 事前分布の強さ（仮想出走数）。大きいほど少数サンプルを割り引く。
+  // track / distance は適性の差に掛ける信頼度 n/(n+k) の k（比較する両方の成績に適用）。
+  // 適性は2つのばらつく率の差なので水準より強めに割り引く（当地1戦2着で動くのは+3点程度）
+  priorStarts: Object.freeze({ career: 6, track: 8, distance: 6 }),
   // 持ち時計: 出走馬の中央値との差(秒)をロジスティックで 0〜1 に。0.8秒差で約0.73
   timeScaleSec: 0.8,
   timeMinHorses: 3, // 時計を比較する最低頭数
@@ -137,23 +139,39 @@ function shrunkRate(record, priorRate, priorStarts) {
   return { n: rec.n, rate: (rec.points + priorRate * priorStarts) / (rec.n + priorStarts) };
 }
 
-const levelScore = (rate) => clamp(1 - Math.exp(-rate / NAR_SCORING.levelScale), 0, 1);
-const aptitudeScore = (diff) => clamp(0.5 + 0.5 * Math.tanh(diff / NAR_SCORING.aptitudeScale), 0, 1);
+const levelScore = (rate) => clamp(1 - Math.exp(-Math.max(0, rate) / NAR_SCORING.levelScale), 0, 1);
 
 /**
- * 全成績 → 当競馬場成績 → 当距離成績 の階層的な推定。
- * track / distance は親の推定値へ寄せたポイント率と、親との差（aptitude）を持つ。
+ * 部分成績（当地など）と、親成績からそれを除いた残り（他場など）の着順ポイント率の差（適性）。
+ * 両方の出走数による信頼度を掛けて割り引く。部分成績が無ければ null、残りが無ければ比較できないので 0。
+ */
+function aptitudeDiff(part, parent, k) {
+  const p = recordPoints(part);
+  const all = recordPoints(parent);
+  if (!p || !all) return null;
+  const restN = all.n - p.n;
+  if (restN <= 0) return { n: p.n, aptitude: 0 };
+  const restRate = clamp((all.points - p.points) / restN, 0, 1);
+  const reliability = (p.n / (p.n + k)) * (restN / (restN + k));
+  return { n: p.n, aptitude: (p.points / p.n - restRate) * reliability };
+}
+
+/**
+ * 全成績の水準と、当競馬場・当距離での推定水準（ポイント率）。
+ * 各要素は { n, rate }。当地・当距離の出走が無い / 全成績が無ければ null。
  */
 function recordEstimates(horse) {
   const s = NAR_SCORING;
   const career = shrunkRate(horse.careerRecord, s.priorRate, s.priorStarts.career);
-  const careerRate = career ? career.rate : s.priorRate;
-  const track = shrunkRate(horse.trackRecord, careerRate, s.priorStarts.track);
-  const trackRate = track ? track.rate : careerRate;
-  const distance = shrunkRate(horse.sameDistanceRecord, trackRate, s.priorStarts.distance);
-  if (track) track.aptitude = track.rate - careerRate;
-  if (distance) distance.aptitude = distance.rate - trackRate;
-  return { career, track, distance };
+  if (!career) return { career: null, track: null, distance: null };
+  const t = aptitudeDiff(horse.trackRecord, horse.careerRecord, s.priorStarts.track);
+  const d = aptitudeDiff(horse.sameDistanceRecord, horse.trackRecord, s.priorStarts.distance);
+  const trackApt = t ? t.aptitude : 0;
+  return {
+    career,
+    track: t ? { n: t.n, rate: career.rate + trackApt, aptitude: trackApt } : null,
+    distance: d ? { n: d.n, rate: career.rate + trackApt + d.aptitude, aptitude: d.aptitude } : null,
+  };
 }
 
 // ---------- 持ち時計 ----------
@@ -305,8 +323,8 @@ const narDailyProfile = {
     return {
       factors: {
         career: est.career ? levelScore(est.career.rate) : null,
-        track: est.track ? aptitudeScore(est.track.aptitude) : null,
-        distance: est.distance ? aptitudeScore(est.distance.aptitude) : null,
+        track: est.track ? levelScore(est.track.rate) : null,
+        distance: est.distance ? levelScore(est.distance.rate) : null,
         bestTime: scoreBestTime(horse, ctx),
         weight: scoreWeight(horse, ctx),
         bodyWeight: scoreBodyWeight(horse),
