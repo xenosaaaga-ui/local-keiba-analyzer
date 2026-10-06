@@ -11,6 +11,7 @@ const { scoreRecord } = require('../../prediction/scoring');
 // 競馬場名 → URL ハッシュ用 ID（未知の競馬場は track1, track2 … を割り当てる）
 const TRACK_IDS = {
   帯広: 'obihiro',
+  帯広ば: 'obihiro', // 月次ファイルではばんえいがこの表記
   門別: 'monbetsu',
   盛岡: 'morioka',
   水沢: 'mizusawa',
@@ -109,6 +110,7 @@ function toHorse(row, race, winOdds) {
     number,
     frame: toInt(row['枠番']),
     name: row['馬名'] || null,
+    birthDate: row['生年月日'] || null, // 馬名 + 生年月日 で過去走と照合する（公式に馬IDは無い）
     sex: row['性'] || null,
     age: toInt(row['齢']),
     jockey: row['騎手名'] || null,
@@ -198,4 +200,4 @@ function buildSnapshot(raceFiles, oddsFiles) {
   return { date, tracks, races, hasOdds: Boolean(oddsCsv) };
 }
 
-module.exports = { buildSnapshot, parseRecord, parseRaceTime, toNum, formatTime, parseWinOdds, TRACK_IDS };
+module.exports = { buildSnapshot, parseCsv, findFile, parseRecord, parseRaceTime, toNum, toInt, formatTime, parseWinOdds, TRACK_IDS, SCRATCH_PATTERN };

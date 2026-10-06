@@ -37,6 +37,7 @@
     if (!ds.mock) {
       text = '実データ';
       detail = `NAR公式データ（${ds.fetchedAt ? `${fmtClock(ds.fetchedAt)} 取得・最大5分ごとに更新` : '取得済み'}）`;
+      if (ds.history) detail += ` ・近5走 ${ds.history.matched}/${ds.history.total}頭照合（月次${ds.history.months.length}か月分）`;
       if (ds.warnings && ds.warnings.length) detail += ' ⚠ ' + ds.warnings.join(' / ');
     } else if (ds.fallback) {
       text = 'モック';
@@ -223,6 +224,37 @@
     return `<div>近5走（左が前走）<div class="recent">${items}</div></div>`;
   }
 
+  // ---------- 近5走（実データ：月次ファイルから照合） ----------
+  const fmtMd = (ymd) => (/^\d{8}$/.test(ymd || '') ? `${Number(ymd.slice(4, 6))}/${Number(ymd.slice(6, 8))}` : '-');
+  const finishCls = (f) => (f === 1 ? 'win' : isNum(f) && f <= 3 ? 'place' : '');
+
+  /** カード上の簡易表示: 着順チップ（左が前走）＋前走からの日数 */
+  function recentRunsStrip(h) {
+    if (!Array.isArray(h.recentRuns)) return '';
+    if (!h.recentRuns.length) return '<div class="recent-strip none">近5走: 近6か月のNAR出走なし</div>';
+    const chips = h.recentRuns
+      .map((r) => {
+        const label = isNum(r.finish) ? `${r.finish}<small>/${r.runners}</small>` : '中止';
+        const title = `${fmtMd(r.date)} ${r.track} ${r.distance ?? ''}m ${r.going || ''} ${isNum(r.finish) ? r.finish + '着' : '競走中止等'}`;
+        return `<span class="${finishCls(r.finish)}" title="${esc(title)}">${label}</span>`;
+      })
+      .join('');
+    const rest = isNum(h.daysSinceLast) ? `<span class="rest">前走から${h.daysSinceLast}日</span>` : '';
+    return `<div class="recent-strip"><span class="label">近5走</span><span class="recent">${chips}</span>${rest}</div>`;
+  }
+
+  /** 詳しいデータ内の表: 日付・競馬場・距離・馬場・着順・着差・走破タイム・上がり3F */
+  function recentRunsTable(h) {
+    if (!Array.isArray(h.recentRuns) || !h.recentRuns.length) return '';
+    const rows = h.recentRuns
+      .map((r) => {
+        const margin = r.finish === 1 ? (isNum(r.behind) && r.behind < 0 ? `${r.behind.toFixed(1)}` : '-') : `${esc(r.margin || '-')}${isNum(r.behind) ? ` (${r.behind.toFixed(1)})` : ''}`;
+        return `<tr><td>${fmtMd(r.date)}</td><td>${esc(r.track)}</td><td>${esc(r.distance ?? '-')}</td><td>${esc(r.going || '-')}</td><td class="${finishCls(r.finish)}">${isNum(r.finish) ? `${r.finish}/${r.runners}` : '中止'}</td><td>${margin}</td><td>${isNum(r.time) ? fmtTime(r.time) : '-'}</td><td>${isNum(r.last3F) ? r.last3F.toFixed(1) : '-'}</td></tr>`;
+      })
+      .join('');
+    return `<div class="runs-wrap"><table class="runs"><thead><tr><th>日付</th><th>場</th><th>距離</th><th>馬場</th><th>着順</th><th>着差(秒)</th><th>タイム</th><th>上3F</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
   function recText(rec) {
     if (!rec || !isNum(rec.starts)) return '-';
     return `${rec.starts}戦${rec.wins ?? 0}勝 (3着内${rec.places ?? 0})`;
@@ -258,15 +290,16 @@
             <div class="stat"><div class="stat-label">予想指数</div><div class="stat-value">${isNum(p.index) ? p.index.toFixed(0) : '-'}</div></div>
           </div>
           <div class="bar" aria-hidden="true"><span style="width:${isNum(p.index) ? p.index : 0}%"></span></div>
+          ${recentRunsStrip(h)}
           <ul class="reasons">
             ${p.reasons.map((r) => `<li class="${r.type}"><span class="ico">${r.type === 'plus' ? '＋' : '－'}</span><span>${esc(r.text)}</span></li>`).join('')}
           </ul>
           <details class="details">
             <summary>詳しいデータ</summary>
-            ${recentHtml(h)}
+            ${Array.isArray(h.recentRuns) ? recentRunsTable(h) : recentHtml(h)}
             ${h.careerRecord ? `<div>全成績: ${esc(recText(h.careerRecord))}${isNum(h.bodyWeight) ? ` ／ 馬体重: ${h.bodyWeight}kg${isNum(h.bodyWeightDiff) ? `(${h.bodyWeightDiff > 0 ? '+' : ''}${h.bodyWeightDiff})` : ''}` : ''}${isNum(h.bestTime) ? ` ／ 持ち時計: ${fmtTime(h.bestTime)}` : ''}</div>` : ''}
             <div>同距離: ${esc(recText(h.sameDistanceRecord))} ／ 当地: ${esc(recText(h.trackRecord))}</div>
-            <div>馬場適性: ${isNum(h.surfaceAptitude) ? '★'.repeat(h.surfaceAptitude) : '-'} ／ 騎手評価: ${isNum(h.jockeyRating) ? h.jockeyRating : '-'} ／ クラス評価: ${isNum(h.classRating) ? h.classRating : '-'} ／ 休養: ${isNum(h.restDays) ? h.restDays + '日' : '-'}</div>
+            ${state.data.meta.profile === 'narDaily' ? '' : `<div>馬場適性: ${isNum(h.surfaceAptitude) ? '★'.repeat(h.surfaceAptitude) : '-'} ／ 騎手評価: ${isNum(h.jockeyRating) ? h.jockeyRating : '-'} ／ クラス評価: ${isNum(h.classRating) ? h.classRating : '-'} ／ 休養: ${isNum(h.restDays) ? h.restDays + '日' : '-'}</div>`}
             <div class="factors">${factors}</div>
           </details>
         </article>`;

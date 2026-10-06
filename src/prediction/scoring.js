@@ -165,4 +165,5 @@ module.exports = {
   computeIndex,
   fieldAverageWeight,
   finishPos,
+  restScore,
 };

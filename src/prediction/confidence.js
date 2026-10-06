@@ -52,7 +52,7 @@ function assessConfidence(analyzed, thresholds = DEFAULT_THRESHOLDS) {
     score,
     details: [
       `利用データ: 平均${pct(coverage)}`,
-      `成績サンプル: 十分な馬${pct(primaryOk)}・距離実績あり${pct(distanceOk)}`,
+      `成績サンプル: ${t.primaryLabel || '十分な馬'}${pct(primaryOk)}・距離実績あり${pct(distanceOk)}`,
       `上位の指数差: ${gap.toFixed(1)}`,
     ],
     metrics: { coverage: Math.round(coverage * 100) / 100, primaryOk: Math.round(primaryOk * 100) / 100, distanceOk: Math.round(distanceOk * 100) / 100, gap: Math.round(gap * 10) / 10 },

@@ -2,27 +2,24 @@
 
 const { DEFAULT_CONFIG } = require('../config');
 const { num, clamp, round } = require('../utils');
-const { placeRate } = require('../scoring');
+const { placeRate, restScore } = require('../scoring');
 const { validOdds } = require('../expectedValue');
 const { finalizeReasons } = require('../reasons');
 const { assessConfidence, DEFAULT_THRESHOLDS } = require('../confidence');
 
 /**
- * NAR 当日データ専用の予想プロファイル。
+ * NAR 実データ専用の予想プロファイル（当日ファイル + 月次ファイルの近5走）。単勝オッズは指数に使わない。
  *
- * 当日ファイルには近走着順・騎手評価・休養日数が無いため、v0.1 のファクターでは
- * 重みの最大45%しか埋まらず、全レースが「欠損で見送り」になっていた。
- * ここでは当日ファイルに実在する項目だけで予想指数を組み立てる。単勝オッズは指数に使わない。
- *
- * ウェイトの検討（暫定案 → 採用値）
- *   全成績        25% → 25%
- *   当競馬場成績  20% → 20%
- *   当距離成績    25% → 25%
- *   最高タイム    15% → 20%  出走馬間で直接比較できる唯一の「能力の物差し」。成績系は相手関係
- *                            （クラス）を反映しないため、比較可能な時計の比重を上げる。
- *   斤量          10% →  5%  NAR の斤量差は性別・年齢・減量騎手（★☆▲◇）・ハンデなど、能力差を
- *                            埋めるために付けられている。「軽い＝有利」は一部しか成り立たない。
- *   馬体重増減     5% →  5%
+ * ウェイト（v0.2.1 → v0.3）
+ *   近走成績      — → 30%  月次ファイルから照合した近5走。近走は今の調子とクラス（相手関係）を
+ *                          最も直接に反映するので最大の比重にする。
+ *   全成績       25% → 15%  近走と重なる情報なので、近走を入れた分だけ下げる
+ *   当競馬場成績 20% → 10%
+ *   当距離成績   25% → 15%
+ *   持ち時計     20% → 15%
+ *   斤量          5% →  5%  NAR の斤量差は性別・年齢・減量騎手・ハンデなど能力差を埋めるためのもの
+ *   馬体重増減    5% →  5%
+ *   休養          — →  5%  前走からの日数
  *
  * 全成績 ⊇ 当競馬場成績 ⊇ 当距離成績 の入れ子構造なので、3項目を別々に「水準」として評価すると
  * 同じ成績を3重に数えたり、少数サンプルの補正の仕方で見かけの差が出たりする。そこで、すべて
@@ -37,21 +34,25 @@ const { assessConfidence, DEFAULT_THRESHOLDS } = require('../confidence');
  */
 
 const NAR_WEIGHTS = Object.freeze({
-  career: 0.25,
-  track: 0.2,
-  distance: 0.25,
-  bestTime: 0.2,
+  recentForm: 0.3,
+  career: 0.15,
+  track: 0.1,
+  distance: 0.15,
+  bestTime: 0.15,
   weight: 0.05,
   bodyWeight: 0.05,
+  rest: 0.05,
 });
 
 const NAR_FACTOR_LABELS = Object.freeze({
+  recentForm: '近走成績',
   career: '全成績',
   track: '当競馬場成績',
   distance: '当距離成績',
   bestTime: '持ち時計',
   weight: '斤量',
   bodyWeight: '馬体重増減',
+  rest: '休養',
 });
 
 const NAR_SCORING = Object.freeze({
@@ -74,6 +75,18 @@ const NAR_SCORING = Object.freeze({
   weightPerKg: 0.05,
   // 馬体重増減: exp(-(Δ/12)^2)。±6kg で 0.78、±12kg で 0.37
   bodyWeightScaleKg: 12,
+  // 近走: 直近ほど重く（前走35%・2走前25%・18%・12%・10%。走数が少なければ再正規化）
+  recency: Object.freeze([0.35, 0.25, 0.18, 0.12, 0.1]),
+  // 1走のスコア = 0.65×着順 + 0.35×着差。着順は頭数に対する相対位置 exp(-2.4×(着順-1)/(頭数-1))
+  // （12頭立てで 2着0.80・3着0.65・6着0.34・最下位0.09）。着差は勝ち馬とのタイム差を
+  // 1400m 換算して exp(-秒/0.8)（0.5秒差0.53・1秒差0.29）。競走中止・失格は0
+  finishDecay: 2.4,
+  marginScaleSec: 0.8,
+  marginRefDistance: 1400,
+  marginMinDistance: 400, // ばんえい(200m)などは着差を使わず着順だけ
+  // 走数が少ないときは平均的な馬(0.3)へ寄せる。仮想的な「前走1走の4分の3」分の重み
+  formPrior: 0.3,
+  formPriorWeight: 0.25,
 });
 
 /**
@@ -106,6 +119,8 @@ const NAR_CONFIG = Object.freeze({
   // 指数差 6 以上で1点・12 以上で2点（モック用の 3/6 では大半が「高」になる）
   confidence: Object.freeze({
     ...DEFAULT_THRESHOLDS,
+    primaryStarts: 3, // 近走3走以上を「サンプル十分」とする
+    primaryLabel: '近走3走以上の馬',
     coverage: [0.75, 0.9],
     primaryShare: [0.5, 0.8],
     distanceShare: 0.6,
@@ -174,6 +189,49 @@ function recordEstimates(horse) {
   };
 }
 
+// ---------- 近走（月次ファイル） ----------
+
+/** 1走のスコア（0〜1）。データが読めなければ null */
+function runScore(run) {
+  if (!run || typeof run !== 'object') return null;
+  const s = NAR_SCORING;
+  const finish = num(run.finish);
+  if (finish === null || finish < 1) return 0; // 競走中止・失格
+  const runners = Math.max(2, num(run.runners) ?? 10);
+  const pos = Math.exp((-s.finishDecay * clamp(finish - 1, 0, runners - 1)) / (runners - 1));
+  const behind = num(run.behind);
+  const dist = num(run.distance);
+  if (behind === null || dist === null || dist < s.marginMinDistance) return pos;
+  const sec = (behind * s.marginRefDistance) / dist;
+  const margin = sec <= 0 ? 1 : Math.exp(-sec / s.marginScaleSec);
+  return 0.65 * pos + 0.35 * margin;
+}
+
+/** 近5走の加重平均（直近ほど重い）。走数が少ないほど平均的な馬へ寄せる。近走が無ければ null */
+function scoreRecentForm(horse) {
+  const runs = Array.isArray(horse.recentRuns) ? horse.recentRuns : [];
+  const s = NAR_SCORING;
+  let sum = 0;
+  let wsum = 0;
+  runs.slice(0, s.recency.length).forEach((run, i) => {
+    const v = runScore(run);
+    if (v === null) return;
+    sum += s.recency[i] * v;
+    wsum += s.recency[i];
+  });
+  if (wsum === 0) return null;
+  return clamp((sum + s.formPrior * s.formPriorWeight) / (wsum + s.formPriorWeight), 0, 1);
+}
+
+/**
+ * 前走からの日数。近6か月に NAR での出走が無い馬は、長期休養明けか中央(JRA)などからの転入か
+ * 区別できないので null（評価しない）。
+ */
+function restDaysOf(horse) {
+  const d = num(horse.daysSinceLast);
+  return d !== null && d >= 0 ? d : null;
+}
+
 // ---------- 持ち時計 ----------
 
 /** 距離に対して現実的な時計なら秒数、そうでなければ null */
@@ -223,6 +281,23 @@ function buildNarReasons(horse, ctx) {
   const minus = [];
   const add = (list, text, strength) => list.push({ text, strength });
   const f = ctx.factors || {};
+
+  // 近走（月次ファイル）
+  const runs = Array.isArray(horse.recentRuns) ? horse.recentRuns : null;
+  if (runs && runs.length) {
+    const last3 = runs.slice(0, 3).map((r) => num(r.finish));
+    const top3 = last3.filter((p) => p !== null && p <= 3).length;
+    if (num(runs[0].finish) === 1) add(plus, '前走1着で勢いあり', 0.85);
+    if (last3.length >= 2 && top3 >= 2) add(plus, `近${last3.length}走中${top3}回3着内と安定`, 0.8 + top3 * 0.05);
+    const fr = num(f.recentForm);
+    if (fr !== null && fr < 0.3 && top3 === 0) add(minus, '近走は着順が振るわない', 0.75);
+    if (runs.length <= 2) add(minus, `近6か月のNAR出走は${runs.length}走のみ`, 0.4);
+  } else if (runs && num(horse.careerRecord && horse.careerRecord.starts)) {
+    add(minus, '近6か月にNARでの出走なし（休養明け・転入の可能性）', 0.7);
+  }
+  const rest = num(horse.daysSinceLast);
+  if (rest !== null && rest > 90) add(minus, `休養明け（前走から${rest}日）`, 0.6 + Math.min(rest, 240) / 1000);
+  else if (rest !== null && rest <= 9) add(minus, `間隔が詰まっている（前走から${rest}日）`, 0.45);
 
   const career = horse.careerRecord;
   const careerStarts = num(career && career.starts);
@@ -320,17 +395,21 @@ const narDailyProfile = {
 
   scoreHorse(horse, ctx) {
     const est = recordEstimates(horse);
+    const rest = restDaysOf(horse);
     return {
       factors: {
+        recentForm: scoreRecentForm(horse),
         career: est.career ? levelScore(est.career.rate) : null,
         track: est.track ? levelScore(est.track.rate) : null,
         distance: est.distance ? levelScore(est.distance.rate) : null,
         bestTime: scoreBestTime(horse, ctx),
         weight: scoreWeight(horse, ctx),
         bodyWeight: scoreBodyWeight(horse),
+        rest: rest === null ? null : restScore(rest),
       },
       samples: {
-        primary: est.career ? est.career.n : 0,
+        primary: Array.isArray(horse.recentRuns) ? horse.recentRuns.length : 0, // 近走の数
+        career: est.career ? est.career.n : 0,
         track: est.track ? est.track.n : 0,
         distance: est.distance ? est.distance.n : 0,
       },
@@ -342,4 +421,4 @@ const narDailyProfile = {
   assessConfidence: (analyzed, config) => assessConfidence(analyzed, config.confidence),
 };
 
-module.exports = { narDailyProfile, NAR_WEIGHTS, NAR_CONFIG, NAR_SCORING, recordEstimates, recordPoints };
+module.exports = { narDailyProfile, NAR_WEIGHTS, NAR_CONFIG, NAR_SCORING, recordEstimates, recordPoints, runScore, scoreRecentForm };

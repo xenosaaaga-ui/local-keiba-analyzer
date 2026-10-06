@@ -75,24 +75,24 @@ test('実データのレースも予想ロジックで NaN を出さずに分析
 test('narAdapter: 5分キャッシュ・同時アクセスは1回の取得にまとめる', async () => {
   const fake = createFakeNarFetch();
   let t = 0;
-  const nar = createNarAdapter({ fetchImpl: fake.fetch, now: () => t });
+  const nar = createNarAdapter({ history: null, fetchImpl: fake.fetch, now: () => t });
 
   await Promise.all([nar.getTracks(), nar.getRaces('ooi'), nar.getRace('ooi', 1)]);
-  assert.deepEqual(fake.calls, { race: 1, odds: 1 });
+  assert.deepEqual({ race: fake.calls.race, odds: fake.calls.odds }, { race: 1, odds: 1 });
 
   t += 4 * 60 * 1000;
   await nar.getRace('ooi', 2);
-  assert.deepEqual(fake.calls, { race: 1, odds: 1 }); // 5分以内は再取得しない
+  assert.deepEqual({ race: fake.calls.race, odds: fake.calls.odds }, { race: 1, odds: 1 }); // 5分以内は再取得しない
 
   t += 61 * 1000;
   await nar.getTracks();
-  assert.deepEqual(fake.calls, { race: 2, odds: 2 });
+  assert.deepEqual({ race: fake.calls.race, odds: fake.calls.odds }, { race: 2, odds: 2 });
   assert.equal(nar.status().date, '20261006');
 });
 
 test('narAdapter: オッズだけ失敗したらオッズ無しの実データ + 警告', async () => {
   const fake = createFakeNarFetch({ odds: () => ({ status: 500 }) });
-  const nar = createNarAdapter({ fetchImpl: fake.fetch });
+  const nar = createNarAdapter({ history: null, fetchImpl: fake.fetch });
   const race = await nar.getRace('ooi', 1);
   assert.equal(race.horses[0].odds, null);
   assert.equal(nar.status().hasOdds, false);
@@ -102,7 +102,7 @@ test('narAdapter: オッズだけ失敗したらオッズ無しの実データ +
 test('narAdapter: race.zip 失敗時は例外、2分間は再アクセスしない', async () => {
   const fake = createFakeNarFetch({ race: () => ({ status: 403 }) });
   let t = 0;
-  const nar = createNarAdapter({ fetchImpl: fake.fetch, now: () => t });
+  const nar = createNarAdapter({ history: null, fetchImpl: fake.fetch, now: () => t });
   await assert.rejects(nar.getTracks(), /HTTP 403/);
   await assert.rejects(nar.getTracks(), /待機中/);
   assert.equal(fake.calls.race, 1);
@@ -112,13 +112,13 @@ test('narAdapter: race.zip 失敗時は例外、2分間は再アクセスしな�
 });
 
 test('fallbackAdapter: 実データ失敗時はモックを使い、理由を返す', async () => {
-  const ok = createFallbackSource(createNarAdapter({ fetchImpl: createFakeNarFetch().fetch }), createMockAdapter());
+  const ok = createFallbackSource(createNarAdapter({ history: null, fetchImpl: createFakeNarFetch().fetch }), createMockAdapter());
   const r1 = await ok.resolve();
   assert.equal(r1.status.source, 'nar');
   assert.equal(r1.status.mock, false);
 
   const html = createFakeNarFetch({ race: () => new TextEncoder().encode('<html>maintenance</html>') });
-  const ng = createFallbackSource(createNarAdapter({ fetchImpl: html.fetch }), createMockAdapter());
+  const ng = createFallbackSource(createNarAdapter({ history: null, fetchImpl: html.fetch }), createMockAdapter());
   const r2 = await ng.resolve();
   assert.equal(r2.status.source, 'mock');
   assert.equal(r2.status.fallback, true);
@@ -131,7 +131,7 @@ const AUTH = { user: 'me', password: 'pw' };
 const headers = { Authorization: `Basic ${Buffer.from('me:pw').toString('base64')}` };
 
 async function withApp(realFetch, fn) {
-  const realDataSource = createFallbackSource(createNarAdapter({ fetchImpl: realFetch }), createMockAdapter());
+  const realDataSource = createFallbackSource(createNarAdapter({ history: null, fetchImpl: realFetch }), createMockAdapter());
   const server = createApp({ auth: AUTH, realDataSource, diagnose: async () => ({ ok: true }) }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   try {

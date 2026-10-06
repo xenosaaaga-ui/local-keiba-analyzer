@@ -289,6 +289,18 @@ button { font: inherit; color: inherit; }
 }
 .recent span.win { background: #ffe066; color: #111; }
 .recent span.place { background: #d0ebff; color: #111; }
+.recent-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.recent-strip .label { font-weight: 700; }
+.recent-strip .recent { margin: 0; }
+.recent-strip .recent small { font-size: 9px; font-weight: 500; opacity: 0.7; }
+.recent-strip.none { font-style: normal; }
+.runs-wrap { overflow-x: auto; margin: 4px 0 6px; }
+.runs { border-collapse: collapse; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.runs th, .runs td { padding: 2px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+.runs th { color: var(--muted); font-weight: 600; }
+.runs td { color: var(--text); }
+.runs td.win { background: #ffe066; color: #111; font-weight: 700; }
+.runs td.place { background: #d0ebff; color: #111; font-weight: 700; }
 .factors { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: center; margin-top: 6px; }
 .factors .fbar { height: 5px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
 .factors .fbar span { display: block; height: 100%; background: var(--muted); }

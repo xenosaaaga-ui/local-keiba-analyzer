@@ -17,3 +17,15 @@ services:
         sync: false
       - key: REAL_AUTH_PASSWORD
         sync: false
+      # 月次ファイルから作った近走データの保存先（Web のスリープをまたいで保持し、月次の取得を1日1回以下にする）
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: local-keiba-analyzer-kv
+          property: connectionString
+  - type: keyvalue
+    name: local-keiba-analyzer-kv
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # 内部接続のみ

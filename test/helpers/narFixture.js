@@ -43,7 +43,7 @@ function raceRow(track, raceNo, extra = {}) {
 function horseRow(track, raceNo, number, extra = {}) {
   return {
     競馬場: track, 競走年月日: '20261006', レース番号: raceNo, 枠番: number, 馬番: number, 馬名: `テストホース${number}`,
-    性: '牡', 齢: 4, 騎手名: `騎手${number}`, 負担重量: 56, 調教師: `調教${number}`, 馬主氏名: '架空オーナー',
+    性: '牡', 齢: 4, 生年月日: `202204${String(number).padStart(2, '0')}`, 騎手名: `騎手${number}`, 負担重量: 56, 調教師: `調教${number}`, 馬主氏名: '架空オーナー',
     馬体重: 470, 馬体重増減: '+2', 全成績: '2-1-1-6', ダート左成績: '0-0-0-0', ダート右成績: '2-1-1-6',
     当競馬場成績: '1-1-0-3', うち当距離成績: '1-0-0-1', 人気: number, ...extra,
   };
@@ -78,15 +78,45 @@ function buildOddsZip() {
   return zipSync({ '20261006_odds.csv': strToU8(toCsv(ODDS_HEADER, odds)) });
 }
 
+/**
+ * 月次 race.zip（架空）。runs: [{ date, track, raceNo, distance, going, name, birth, finish, time, margin, last3F }]
+ * time は秒（ファイル上は "1270" 形式に変換して書き込む）
+ */
+function buildMonthlyZip(month, runs) {
+  const packTime = (sec) => (sec == null ? '' : String(Math.floor(sec / 60) * 1000 + Math.round((sec % 60) * 10)));
+  const raceKeys = [...new Set(runs.map((r) => `${r.track}|${r.date}|${r.raceNo}`))];
+  const races = raceKeys.map((k) => {
+    const [track, date, raceNo] = k.split('|');
+    const r = runs.find((x) => `${x.track}|${x.date}|${x.raceNo}` === k);
+    return raceRow(track, Number(raceNo), { 競走年月日: date, 距離: r.distance ?? 1400, 馬場: r.going ?? '良', レース名: `過去${raceNo}R` });
+  });
+  const horses = runs.map((r, i) =>
+    horseRow(r.track, r.raceNo, i + 1, {
+      競走年月日: r.date, 馬名: r.name, 生年月日: r.birth, 着順: r.finish ?? '', タイム: packTime(r.time), 着差: r.margin ?? '', 上がり3F: r.last3F ?? '',
+    }),
+  );
+  return zipSync({
+    [`${month}_racelist.csv`]: strToU8(toCsv(RACELIST_HEADER, races)),
+    [`${month}_horselist.csv`]: strToU8(toCsv(HORSELIST_HEADER, horses)),
+  });
+}
+
 /** NAR の URL を見て race.zip / odds.zip を返す fetch の代用品。呼び出し回数を記録する */
-function createFakeNarFetch({ race = () => buildRaceZip(), odds = () => buildOddsZip() } = {}) {
-  const calls = { race: 0, odds: 0 };
+function createFakeNarFetch({ race = () => buildRaceZip(), odds = () => buildOddsZip(), monthly = null } = {}) {
+  const calls = { race: 0, odds: 0, monthly: [] };
   const respond = (body) => {
     if (body instanceof Error) throw body;
     if (body && body.status) return new Response(body.body ?? 'error', { status: body.status });
     return new Response(body, { status: 200, headers: { 'content-type': 'application/zip' } });
   };
   async function fakeFetch(url) {
+    if (String(url).includes('type=monthly')) {
+      const m = /k_year=(\d+)&k_month=(\d+)/.exec(String(url));
+      const month = `${m[1]}${m[2].padStart(2, '0')}`;
+      calls.monthly.push(month);
+      if (!monthly) throw new Error(`unexpected monthly ${month}`);
+      return respond(monthly(month));
+    }
     if (String(url).includes('RaceDataDownload')) {
       calls.race++;
       return respond(race());
@@ -100,4 +130,4 @@ function createFakeNarFetch({ race = () => buildRaceZip(), odds = () => buildOdd
   return { fetch: fakeFetch, calls };
 }
 
-module.exports = { buildRaceZip, buildOddsZip, createFakeNarFetch };
+module.exports = { buildRaceZip, buildOddsZip, buildMonthlyZip, createFakeNarFetch };

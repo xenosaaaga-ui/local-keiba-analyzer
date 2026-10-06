@@ -15,6 +15,8 @@ const TIMEOUT_MS = 20000;
 const URLS = {
   dailyRace: `${BASE_URL}/RaceDataDownload?type=daily`,
   dailyOdds: `${BASE_URL}/OddsDataDownload?type=daily`,
+  /** 月次レース情報（"202609" → 2026年9月）。推奨取得頻度は1日1回が上限 */
+  monthlyRace: (month) => `${BASE_URL}/RaceDataDownload?type=monthly&k_year=${month.slice(0, 4)}&k_month=${Number(month.slice(4, 6))}`,
 };
 
 /** ZIP のローカルファイルヘッダ "PK\x03\x04" で始まるか */

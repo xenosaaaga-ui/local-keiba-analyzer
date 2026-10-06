@@ -41,7 +41,7 @@ const pred = (result, number) => result.horses.find((h) => h.number === number).
 test('NAR: scoringProfile で専用プロファイルが選ばれ、モックは従来プロファイルのまま', async () => {
   const nar = analyzeRace(narRace(field()));
   assert.equal(nar.meta.profile, 'narDaily');
-  assert.deepEqual(Object.keys(nar.meta.factorLabels), ['career', 'track', 'distance', 'bestTime', 'weight', 'bodyWeight']);
+  assert.deepEqual(Object.keys(nar.meta.factorLabels), ['recentForm', 'career', 'track', 'distance', 'bestTime', 'weight', 'bodyWeight', 'rest']);
   assert.ok(Math.abs(Object.values(nar.meta.weights).reduce((a, b) => a + b, 0) - 1) < 1e-9);
 
   const mock = createMockAdapter();
@@ -86,6 +86,41 @@ test('NAR: 当競馬場・当距離は「全成績の水準 + 適性」で評価
   // 他場は凡走続きだが当地で好走が多い → 当地の評価が全成績より明確に高い
   const local = factors({ careerRecord: rec(4, 3, 3, 20), trackRecord: rec(4, 3, 2, 3) });
   assert.ok(local.track - local.career >= 10, JSON.stringify(local));
+});
+
+const run = (finish, extra = {}) => ({ date: '20260920', track: '大井', distance: 1400, going: '良', finish, runners: 12, behind: finish === 1 ? -0.2 : (finish - 1) * 0.3, ...extra });
+
+test('NAR 近走: 直近ほど重く、着順は頭数に対する相対位置、着差は距離換算', () => {
+  const { runScore, scoreRecentForm } = require('../src/prediction/profiles/narDaily');
+  assert.ok(runScore(run(1)) > runScore(run(3)));
+  assert.equal(runScore(run(null)), 0, '競走中止・失格は0');
+  assert.ok(runScore(run(3, { runners: 6 })) < runScore(run(3, { runners: 14 })), '同じ3着でも少頭数は割り引く');
+  assert.ok(runScore(run(2, { behind: 0.6, distance: 2000 })) > runScore(run(2, { behind: 0.6, distance: 1000 })), '同じ秒差なら長距離ほど小差');
+  assert.equal(runScore(run(2, { distance: 200, behind: 30 })), runScore(run(2, { distance: 200, behind: 1 })), 'ばんえいは着差を使わない');
+
+  // 前走1着・2走前10着 > 前走10着・2走前1着（直近ほど重い）
+  const recentWin = scoreRecentForm({ recentRuns: [run(1), run(10)] });
+  const oldWin = scoreRecentForm({ recentRuns: [run(10), run(1)] });
+  assert.ok(recentWin > oldWin);
+  // 1走だけの好走は5走続けての好走より控えめ（少数サンプルの補正）
+  assert.ok(scoreRecentForm({ recentRuns: [run(1)] }) < scoreRecentForm({ recentRuns: [run(1), run(1), run(1), run(1), run(1)] }));
+  assert.equal(scoreRecentForm({ recentRuns: [] }), null);
+  assert.equal(scoreRecentForm({}), null);
+});
+
+test('NAR 近走: 好調な馬ほど指数が上がり、近走・休養が無い馬は残りのウェイトで評価', () => {
+  const hs = field().map((h) => ({ ...h, recentRuns: [run(6), run(5), run(7)], daysSinceLast: 21 }));
+  hs[2] = { ...hs[2], recentRuns: [run(1), run(2), run(1)], daysSinceLast: 21 };
+  hs[3] = { ...hs[3], recentRuns: [], daysSinceLast: null }; // 近6か月の出走なし（休養明け or 転入）
+  const result = analyzeRace(narRace(hs));
+  assert.equal(result.horses[0].number, 3);
+  const p3 = pred(result, 3);
+  assert.ok(p3.reasons.some((r) => r.text.includes('前走1着')));
+  const p4 = pred(result, 4);
+  assert.equal(p4.factors.recentForm, null);
+  assert.equal(p4.factors.rest, null, '休養明けか転入か区別できないので休養は評価しない');
+  assert.ok(p4.reasons.some((r) => r.text.includes('近6か月にNARでの出走なし')));
+  assertAllFinite(result);
 });
 
 test('NAR: 欠損項目は残りのウェイトで再正規化し、NaN/Infinity を出さない', () => {
