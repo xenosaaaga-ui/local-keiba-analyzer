@@ -6,6 +6,9 @@ const { createDataSource } = require('./data');
 const { createRaceService } = require('./services/raceService');
 const { basicAuth } = require('./auth/basicAuth');
 const { createNarDiagnostics } = require('./data/nar/diagnostics');
+const { createNarAdapter } = require('./data/adapters/narAdapter');
+const { createMockAdapter } = require('./data/adapters/mockAdapter');
+const { createFallbackSource } = require('./data/adapters/fallbackAdapter');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -18,12 +21,13 @@ function createApiRouter(service) {
   });
 
   api.get('/health', (req, res) => {
-    res.json({ ok: true, dataSource: service.dataSourceName, mock: service.isMock });
+    res.json({ ok: true, dataSource: service.dataSourceName });
   });
 
   api.get('/tracks', async (req, res, next) => {
     try {
-      res.json({ tracks: await service.listTracks(), mock: service.isMock });
+      const { tracks, dataStatus } = await service.listTracks();
+      res.json({ tracks, mock: dataStatus.mock, dataStatus });
     } catch (e) {
       next(e);
     }
@@ -33,9 +37,9 @@ function createApiRouter(service) {
     try {
       const track = String(req.query.track || '');
       if (!track) return res.status(400).json({ error: 'track パラメータが必要です' });
-      const races = await service.listRaces(track);
-      if (!races) return res.status(404).json({ error: `競馬場 "${track}" が見つかりません` });
-      res.json({ track, races });
+      const { races, dataStatus } = await service.listRaces(track);
+      if (!races) return res.status(404).json({ error: `競馬場 "${track}" が見つかりません`, dataStatus });
+      res.json({ track, races, mock: dataStatus.mock, dataStatus });
     } catch (e) {
       next(e);
     }
@@ -49,9 +53,9 @@ function createApiRouter(service) {
       if (!Number.isInteger(raceNo) || raceNo < 1) {
         return res.status(400).json({ error: 'race パラメータは1以上の整数で指定してください' });
       }
-      const analysis = await service.getRaceAnalysis(track, raceNo);
-      if (!analysis) return res.status(404).json({ error: 'レースが見つかりません' });
-      res.json({ ...analysis, mock: service.isMock });
+      const { analysis, dataStatus } = await service.getRaceAnalysis(track, raceNo);
+      if (!analysis) return res.status(404).json({ error: 'レースが見つかりません', dataStatus });
+      res.json({ ...analysis, mock: dataStatus.mock, dataStatus });
     } catch (e) {
       next(e);
     }
@@ -62,12 +66,14 @@ function createApiRouter(service) {
 
 /**
  * @param {object} [options]
- * @param {object} [options.dataSource]  公開版のデータソース（常にモック）
+ * @param {object} [options.dataSource]  公開版のデータソース（DATA_SOURCE。登録はモックのみなので常にモック）
  * @param {object} [options.auth]        本人専用モードの認証情報 { user, password }
+ * @param {object} [options.realDataSource]  本人専用モードのデータソース（NAR実データ、失敗時はモック）
  * @param {Function} [options.diagnose]  NAR 疎通診断（テスト用に差し替え可能）
  */
 function createApp({
   dataSource = createDataSource(),
+  realDataSource = createFallbackSource(createNarAdapter(), createMockAdapter()),
   auth = { user: process.env.REAL_AUTH_USER, password: process.env.REAL_AUTH_PASSWORD },
   diagnose = createNarDiagnostics(),
 } = {}) {
@@ -87,6 +93,7 @@ function createApp({
       next(e);
     }
   });
+  realApi.use(createApiRouter(createRaceService(realDataSource)));
   realApi.use((req, res) => res.status(404).json({ error: 'Not found' }));
   real.use('/api', realApi);
   real.use(express.static(PUBLIC_DIR));

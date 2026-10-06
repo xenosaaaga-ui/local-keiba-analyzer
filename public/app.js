@@ -2,7 +2,10 @@
 
 (function () {
   const $ = (id) => document.getElementById(id);
-  const state = { tracks: [], track: null, races: [], raceNo: null, data: null, sort: 'rank' };
+  // /real/ 以下で開いたときは本人専用モード（NAR実データ）の API を使う
+  const REAL_MODE = /^\/real(\/|$)/.test(location.pathname);
+  const API = REAL_MODE ? '/real/api' : '/api';
+  const state = { tracks: [], track: null, races: [], raceNo: null, data: null, sort: 'rank', source: null };
   let requestSeq = 0;
 
   const esc = (v) =>
@@ -12,11 +15,46 @@
   const fmtOdds = (o) => (isNum(o) ? o.toFixed(1) : '-');
   const fmtEv = (ev) => (isNum(ev) ? ev.toFixed(2) : '-');
 
-  async function getJson(url) {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  async function getJson(path) {
+    const res = await fetch(API + path, { headers: { Accept: 'application/json' } });
     const body = await res.json().catch(() => ({}));
+    if (body.dataStatus) renderSource(body.dataStatus);
     if (!res.ok) throw new Error(body.error || `通信エラー (${res.status})`);
     return body;
+  }
+
+  // ---------- 実データ / モック の表示 ----------
+  const fmtClock = (iso) => new Date(iso).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+  function renderSource(ds) {
+    const badge = $('source-badge');
+    const note = $('source-note');
+    badge.hidden = false;
+    badge.classList.toggle('real', !ds.mock);
+    badge.classList.toggle('fallback', Boolean(ds.fallback));
+    let text;
+    let detail = '';
+    if (!ds.mock) {
+      text = '実データ';
+      detail = `NAR公式データ（${ds.fetchedAt ? `${fmtClock(ds.fetchedAt)} 取得・最大5分ごとに更新` : '取得済み'}）`;
+      if (ds.warnings && ds.warnings.length) detail += ' ⚠ ' + ds.warnings.join(' / ');
+    } else if (ds.fallback) {
+      text = 'モック';
+      detail = `⚠ 実データを取得できなかったため、サンプルデータ（架空）を表示中: ${ds.reason || ''}`;
+    } else {
+      text = 'モック';
+      detail = 'サンプルデータ（架空のレース）を表示中';
+    }
+    badge.textContent = text;
+    badge.title = detail;
+    note.textContent = detail;
+    note.classList.toggle('warn', Boolean(ds.fallback || (ds.warnings && ds.warnings.length)));
+    // 実データ ⇔ モックが切り替わったら競馬場一覧から読み直す
+    if (state.source && state.source !== ds.source) {
+      state.source = ds.source;
+      init();
+      return;
+    }
+    state.source = ds.source;
   }
 
   function setStatus(text, isError) {
@@ -62,7 +100,7 @@
     setStatus('読み込み中…');
     const seq = ++requestSeq;
     try {
-      const { races } = await getJson(`/api/races?track=${encodeURIComponent(trackId)}`);
+      const { races } = await getJson(`/races?track=${encodeURIComponent(trackId)}`);
       if (seq !== requestSeq) return;
       state.races = races;
       const target = races.find((r) => r.raceNo === raceNo) || races[0];
@@ -86,10 +124,9 @@
     setStatus('読み込み中…');
     const seq = ++requestSeq;
     try {
-      const data = await getJson(`/api/race?track=${encodeURIComponent(state.track)}&race=${raceNo}`);
+      const data = await getJson(`/race?track=${encodeURIComponent(state.track)}&race=${raceNo}`);
       if (seq !== requestSeq) return;
       state.data = data;
-      $('mock-badge').hidden = !data.mock;
       setStatus('');
       renderRace();
     } catch (e) {
@@ -219,6 +256,7 @@
           <details class="details">
             <summary>詳しいデータ</summary>
             ${recentHtml(h)}
+            ${h.careerRecord ? `<div>全成績: ${esc(recText(h.careerRecord))}${isNum(h.bodyWeight) ? ` ／ 馬体重: ${h.bodyWeight}kg${isNum(h.bodyWeightDiff) ? `(${h.bodyWeightDiff > 0 ? '+' : ''}${h.bodyWeightDiff})` : ''}` : ''}</div>` : ''}
             <div>同距離: ${esc(recText(h.sameDistanceRecord))} ／ 当地: ${esc(recText(h.trackRecord))}</div>
             <div>馬場適性: ${isNum(h.surfaceAptitude) ? '★'.repeat(h.surfaceAptitude) : '-'} ／ 騎手評価: ${isNum(h.jockeyRating) ? h.jockeyRating : '-'} ／ クラス評価: ${isNum(h.classRating) ? h.classRating : '-'} ／ 休養: ${isNum(h.restDays) ? h.restDays + '日' : '-'}</div>
             <div class="factors">${factors}</div>
@@ -248,10 +286,10 @@
   async function init() {
     setStatus('読み込み中…');
     try {
-      const { tracks } = await getJson('/api/tracks');
+      const { tracks } = await getJson('/tracks');
       state.tracks = tracks;
       if (!tracks.length) {
-        setStatus('競馬場データがありません');
+        setStatus(REAL_MODE && state.source === 'nar' ? '本日のNAR開催データはありません' : '競馬場データがありません');
         return;
       }
       const hash = readHash();
